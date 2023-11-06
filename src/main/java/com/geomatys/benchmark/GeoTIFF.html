@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>GeoTIFF reader/writer performance comparison</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+      p {
+        text-align: justify
+      }
+
+      table caption {
+        font-weight: bold;
+      }
+
+      table.report {
+        margin:           24px auto;
+        border-style:     solid;
+        border-width:     2px;
+        border-spacing:   0;
+        padding:          0;
+      }
+
+      table.report tr th {
+        background-color:    #ffcc99;
+        border-bottom-style: solid;
+        border-bottom-width: 1px;
+        padding:             3px 12px;
+      }
+
+      table.report tr td {
+        padding: 3px 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>GeoTIFF reader/writer performance comparison</h1>
+    <p>
+      <a href="https://sis.apache.org">Apache Spatial Information System (<abbr>SIS</abbr>)</a> version 1.4
+      contains a Cloud Optimized GeoTIFF (<abbr>COG</abbr>) reader for raster data.
+      The development branch of Apache <abbr>SIS</abbr> 1.5 (not yet released at the time of writing this blog) contains also a GeoTIFF writer.
+      Those reader and writer are implemented in pure Java code for avoiding the difficulty of bindings to native libraries such as <abbr>GDAL</abbr>.
+      Pure Java code also provides more flexibility for Java developers. For example, the Apache <abbr>SIS</abbr> reader
+      accepts any implementation of the Java <code>ReadableByteChannel</code> standard interface as the source of bytes.
+      Another reason for developing GeoTIFF reader and writer in Java was for prototyping the use of new GeoTIFF keys
+      that are proposed in <a href="https://www.ogc.org/initiatives/t-19/">OGC TestBed-19 — Geospatial in space</a>.
+    </p><p>
+      Coding yet another GeoTIFF reader and writer seems a duplication of work,
+      since most of the geospatial world uses the popular <abbr>GDAL</abbr> library for that purpose.
+      But actually, from Apache <abbr>SIS</abbr> perspective, there is not so much duplication.
+      The most difficult part in a GeoTIFF reader and writer is to handle tiling and compression efficiently.
+      But this task is largely format-independent, and <abbr>SIS</abbr> needs also to handle netCDF and other formats.
+      The Apache <abbr>SIS</abbr> library shares code internally,
+      thus reducing the task of GeoTIFF support to header parsing.
+      By contrast, <abbr>GDAL</abbr> is largely an aggregation of independent libraries
+      such as <code>libtiff</code> and <code>libpng</code>, each with their own ways to resolve common problems.
+    </p><p>
+      Nevertheless, coding GeoTIFF support in Java raises questions about how its performances compare to <abbr>GDAL</abbr>.
+      There is a widespread belief that Java programs are slower than their C/C++ counterpart.
+      In reality, it depends a lot on the kind of application and how the libraries were coded.
+      Differences in algorithms can play a bigger role than differences in the programming languages.
+      This blog will not answer that debate, because the benchmarks presented here depend a lot on native code,
+      either for I/O operations or for <code>DEFLATE</code> compression
+      (the latter is handled by native code in the <code>java.util.zip</code> standard package).
+      However, the benchmarks in this blog demonstrate the capability of a Java program to avoid adding overhead.
+      The result is that Apache <abbr>SIS</abbr>, at least in those benchmarks, compares favorably with <abbr>GDAL</abbr>.
+    </p>
+
+    <h2>Method</h2>
+    <p>
+      The benchmarks reported in this blog are very limited and only scratch the surface on the topic of raster data handling:
+    </p>
+    <ul>
+      <li>All benchmarks were tested with a single image (in two variants).</li>
+      <li>Only one compression method tested (in two variants), together with uncompressed raster.</li>
+      <li>No sub-regions and no sub-samplings tested (there is no technical reasons for this omission).</li>
+      <li>Multi-thread parallelization not tested (would have required some more developments in Apache <abbr>SIS</abbr>).</li>
+    </ul>
+    <p>
+      Sub-regions and requests for reduced resolutions on <abbr>COG</abbr> images should be handled efficiently by Apache <abbr>SIS</abbr>,
+      but benchmarking those features would have required a more complex setup,
+      especially if we want to test in a cloud environment.
+      The simple benchmarks in this blog used a single image which was always read fully, from a local file on a laptop.
+      The image was a single non-<abbr>COG</abbr> raster with the following properties:
+    </p>
+    <table style="margin-left: auto; margin-right: auto">
+      <tr>
+        <th>Raster thumbnail</th>
+        <th>Raster properties</th>
+      </tr><tr>
+        <td>
+          <img src="GeoTIFF.jpg" alt="Thumbnail of the image used for benchmarks">
+        </td>
+        <td style="padding-left: 60px">
+          <table>
+            <tr><td>Producer:</td>         <td>DigitalGlobe</td></tr>
+            <tr><td>Image date:</td>       <td>2014/06/16</td></tr>
+            <tr><td>File size:</td>        <td>192 Mb</td></tr>
+            <tr><td>Image size:</td>       <td>8192 × 8192 pixels</td></tr>
+            <tr><td>Strip size:</td>       <td>8192 × 128 pixels</td></tr>
+            <tr><td>Sample model:</td>     <td>banded (3 separated arrays of red, green and blue).</td></tr>
+            <tr><td>Sample type:</td>      <td>bytes, values ranging from 2 to 255.</td></tr>
+            <tr><td>Compression:</td>      <td>None</td></tr>
+            <tr><td><abbr>CRS</abbr>:</td> <td>WGS 84 / UTM zone 31N</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+    <p>
+      The image was read and rewritten using three libraries: <code>gdal_translate</code>, Java Image I/O and Apache <abbr>SIS</abbr>.
+      For each library, the read/write operations were repeated 10 times in order to allow the Java Virtual Machine to warmup.
+      The two first iterations were ignored, and execution time of the remaining 8 iterations were recorded.
+      Average times and standard deviations are reported in this blog.
+      In the particular case of the <abbr>GDAL</abbr> library, the execution time of <code>gdalinfo</code>
+      has also been measured and its average value has been subtracted from all <code>gdal_translate</code> times.
+      The intend is to take in account the time needed for loading the <abbr>GDAL</abbr> binary,
+      or at least the parts required for reading the image header
+      (it also incidentally includes the time for parsing that header).
+      We apply this correction because our benchmark code relaunches the <abbr>GDAL</abbr> command in each iteration,
+      contrarily to Image I/O and Apache <abbr>SIS</abbr> libraries which are loaded only during their first iteration.
+      The benchmark code is <a href="https://github.com/Geomatys/sis-benchmarks">available on GitHub</a> in the <code>GeoTIFF.java</code> file.
+      The processor of the test machine was Intel Core i7-8750H and the operating system was Fedora Linux 38 (Workstation Edition).
+      Read and write operations were performed in the <code>/tmp/</code> directory, which uses the <code>tmpfs</code> file system.
+      It means that the raster files reside partially in <abbr>RAM</abbr>, so the benchmarks have less delay caused by I/O operations.
+    </p>
+
+    <h3>Method with deflate compression</h3>
+    <p>
+      The same tests were executed again with the <code>DEFLATE</code> compression.
+      That compression is performed by the <code>zlib</code> library,
+      accessible in standard Java thought the <code>java.util.zip</code> package.
+      However, the <code>zlib</code> performance varies greatly depending on the data to compress.
+      For fair comparisons, we must ensure that all the tested libraries write the same data.
+      It is not the case by default because:
+    </p>
+    <ul>
+      <li><abbr>GDAL</abbr> and Java Image I/O change the sample model from "banded" to "pixel interleaved".</li>
+      <li><abbr>GDAL</abbr> changes the strip height from 128 pixels to 1 pixel, thus writing strips of 8 kb.</li>
+      <li>Java Image I/O changes the strip height from 128 pixels to 8 pixels, thus writing strips of 64 kb.</li>
+      <li>Apache <abbr>SIS</abbr> keeps the sample model and strips height as they were in the image that was read.</li>
+    </ul>
+    <p>
+      For avoiding those differences, the input image has been rewritten by Apache <abbr>SIS</abbr>
+      with a "pixel interleaved" sample model and strips of 8 pixels in height.
+      In addition, the <code>-co BLOCKYSIZE=8</code> option has been passed to <code>gdal_translate</code>.
+      A <code>DEFLATE</code> compression has been applied, so the tests will include decompression times
+      in addition of compression times.
+    </p>
+
+    <h2>Results</h2>
+    <p>
+      First, we tested reading the uncompressed image and rewriting it uncompressed too.
+      Average execution times are reported below.
+      The "<abbr>GDAL</abbr> (reduced)" label means that the average execution time of
+      <code>gdalinfo</code> has been subtracted from the execution time of <code>gdal_translate</code>.
+    </p>
+    <table class="report">
+      <caption>Read and write an uncompressed image</caption>
+      <tr><th>Library</th>                     <th>Time (s)</th> <th>Std. dev.</th> <th>File size (bytes)</th></tr>
+      <tr><td><code>gdalinfo</code></td>       <td>0.07</td>     <td>± 0.001</td>   <td></td></tr>
+      <tr><td><abbr>GDAL</abbr> (reduced)</td> <td>0.26</td>     <td>± 0.002</td>   <td>201 351 742</td></tr>
+      <tr><td>Java Image I/O</td>              <td>0.29</td>     <td>± 0.03</td>    <td>201 334 968</td></tr>
+      <tr><td>Apache <abbr>SIS</abbr></td>     <td>0.15</td>     <td>± 0.03</td>    <td>201 351 584</td></tr>
+    </table>
+    <p>
+      Apache <abbr>SIS</abbr> appears faster than other libraries for this particular benchmark.
+      It may be because Apache <abbr>SIS</abbr> does not reorganize the pixel layout:
+      it writes the image with <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/image/BandedSampleModel.html">banded sample model</a>
+      (called "planar configuration" in TIFF), as it was in the image that <abbr>SIS</abbr> has read.
+      By contrast, <abbr>GDAL</abbr> and Image I/O reorganize the pixels into the
+      <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/image/PixelInterleavedSampleModel.html">pixel interleaved sample model</a>.
+      Note that for a Java application, the Java2D architecture around the <code>Raster</code>, <code>SampleModel</code> and <code>ColorModel</code> classes
+      provides a great level of abstraction, generally making unnecessary to restructure the image data.
+    </p>
+
+    <h3>Results with deflate compression</h3>
+    <p>
+      The next benchmark involves reading the same image but with pixel interleaved sample model and deflate compression, then rewriting that image.
+      First, the compression was tested without predictor. The average execution times are reported below.
+      The same <code>gdalinfo</code> measurement than in the previous benchmark is reused for the "GDAL (reduced)" column.
+      No attempt was made for instructing <abbr>GDAL</abbr> to use <code>libdeflate</code> (see below):
+    </p>
+    <table class="report">
+      <caption>Read and write an image with deflate compression and no predictor</caption>
+      <tr><th>Library</th>                     <th>Time (s)</th> <th>Std. dev.</th> <th>File size (bytes)</th></tr>
+      <tr><td><abbr>GDAL</abbr> (reduced)</td> <td>9.20</td>     <td>± 0.04</td>    <td>117 522 070</td></tr>
+      <tr><td>Java Image I/O</td>              <td>8.99</td>     <td>± 0.01</td>    <td>117 522 062</td></tr>
+      <tr><td>Apache <abbr>SIS</abbr></td>     <td>9.04</td>     <td>± 0.03</td>    <td>117 522 062</td></tr>
+    </table>
+    <p>
+      The benchmark has been repeated many times and Java Image I/O was consistently slightly faster than other libraries.
+      One hypothesis may be that, by default, Image I/O reads the whole image as one single tile, while the other libraries does tiling.
+      We have not tried to adjust Image I/O parameters for testing that hypothesis.
+    </p><p>
+      Apache <abbr>SIS</abbr> appears slightly faster than <abbr>GDAL</abbr> in this benchmark,
+      but we should not make general conclusion from this observation because the Java profiler measured
+      that <abbr>SIS</abbr> spend about 95% of its time in the <code>java.util.zip</code> native code.
+      We presume that a similar proportion applies to <abbr>GDAL</abbr> as well,
+      so 95% of this benchmark is probably comparing the same code.
+      We have no certain explanation for the slight difference nevertheless measured between <abbr>GDAL</abbr> and <abbr>SIS</abbr>.
+      One hypothesis may be that the startup time estimation based on <code>gdalinfo</code> is not good enough.
+      Another hypothesis may be that Apache <abbr>SIS</abbr>'s efforts payoff.
+      <abbr>SIS</abbr> tries hard, sometime at the cost of code complexity, to transfer data as directly as possible
+      (i.e. avoid copy operations from one buffer to other temporary buffers before the final destination).
+    </p><p>
+      Note that <abbr>GDAL</abbr> has the capability to
+      <a href="https://github.com/OSGeo/gdal/pull/3068">use <code>libdeflate</code> instead of <code>zlib</code></a>,
+      with a reported performance gain of 35-50%. This acceleration has not been tested in this benchmark.
+    </p>
+
+    <h3>Results with horizontal differentiating predictor</h3>
+    <p>
+      Adding the horizontal differentiating predictor at writing time has the same effect on the two tested libraries.
+      The difference between them are within margin errors, so no conclusion can be made.
+      The "Time increase" column is the difference between the time measured here and the time measured in the benchmark without predictor.
+      The majority of this increase is probably caused by time spent in <code>zlib</code> instead of time spent in applying the predictor.
+      Note that the file sizes also increase.
+      The image used in this test is a case where applying a differentiating predictor is counter-productive.
+    </p>
+    <table class="report">
+      <caption>Read and write an image with deflate compression and horizontal differentiating predictor</caption>
+      <tr><th>Library</th>                     <th>Time (s)</th> <th>Std. dev.</th> <th>Time increase (s)</th> <th>File size (bytes)</th></tr>
+      <tr><td><abbr>GDAL</abbr> (reduced)</td> <td>13.25</td>    <td>± 0.3</td>     <td>4.04</td>              <td>121 997 027</td></tr>
+      <tr><td>Apache <abbr>SIS</abbr></td>     <td>12.93</td>    <td>± 0.2</td>     <td>3.89</td>              <td>121 997 020</td></tr>
+    </table>
+
+    <h2>Conclusion</h2>
+    <p>
+      Because the benchmarks spent 95% of their time in the <code>zlib</code> library (except for the uncompressed case),
+      we cannot make conclusion about the performance of the Java code in Apache <abbr>SIS</abbr>
+      compared to the C/C++ code in <abbr>GDAL</abbr>.
+      However, the benchmarks suggest that Apache <abbr>SIS</abbr> is successful in its attempt to avoid adding overhead.
+      The interfacing between Apache <abbr>SIS</abbr> and <code>java.util.zip</code> and <code>java.nio</code> packages
+      (e.g. using <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/ByteBuffer.html#direct-vs-non-direct-buffers-heading">direct buffers</a>)
+      seems as efficient as the interfacing between <abbr>GDAL</abbr> and the native libraries that it uses.
+      The benchmark measurements were slightly in favor of Apache <abbr>SIS</abbr>, but close to margin errors.
+      Furthermore, a bias may exist despite our effort to apply a correction for <abbr>GDAL</abbr> startup time.
+    </p><p>
+      The benchmarks reported in this blog are a bit superficial and could be improved in many ways:
+      benchmarks should be run on a lot of different images with different sizes, tilings, sample models and color models,
+      benchmarks should request various sub-regions, enable parallelization, measure raster reprojection times,
+      measure memory consumption, <i>etc</i>.
+      However, doing fair performance comparisons of the writers is time-consuming,
+      because it requires making sure that each library compresses the same data.
+      They usually don't, because of different choices in sample models and tile sizes.
+      Adjusting the parameters of each library for comparing the same things may need to be done on a case-by-case basis.
+    </p><p>
+      However, we can probably conclude one thing: the widely spread belief that a C/C++ library such as <abbr>GDAL</abbr>
+      will surely be faster than an equivalent Java library such as Apache <abbr>SIS</abbr> is not always grounded in reality.
+      It is true in some circumstances (e.g. startup time of a Java application stay longer), but should not be generalized.
+      Slow Java codes are often due to poor algorithms rather than the language.
+      More benchmarks between libraries written carefully in both languages are needed before to make conclusions.
+    </p>
+  </body>
+</html>
