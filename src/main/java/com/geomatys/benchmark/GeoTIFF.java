@@ -30,14 +30,17 @@ import java.awt.image.RenderedImage;
 import java.awt.image.Raster;
 import java.awt.geom.AffineTransform;
 import org.apache.sis.setup.OptionKey;
+import org.apache.sis.storage.DataStore;
 import org.apache.sis.storage.DataStoreException;
 import org.apache.sis.storage.GridCoverageResource;
+import org.apache.sis.storage.WritableGridCoverageResource;
 import org.apache.sis.storage.StorageConnector;
 import org.apache.sis.storage.geotiff.Compression;
 import org.apache.sis.storage.geotiff.GeoTiffStore;
 import org.apache.sis.coverage.grid.GridCoverage;
 import org.apache.sis.coverage.grid.j2d.ColorModelFactory;
 import org.apache.sis.coverage.grid.j2d.TiledImage;
+import org.geotoolkit.coverage.tiff.TiffProvider;
 
 
 /**
@@ -80,6 +83,7 @@ public class GeoTIFF {
      * 1 = GDAL,
      * 2 = Image I/O,
      * 3 = Apache SIS,
+     * 4 = Geotk.
      */
     private static final int CASE = 3;
 
@@ -98,6 +102,7 @@ public class GeoTIFF {
                 case 1: test.withGDAL();     break;
                 case 2: test.withImageIO();  break;
                 case 3: test.withSIS(false); break;
+                case 4: test.withGeotk();    break;
             }
             t = System.nanoTime() - t;
             final long length;
@@ -193,6 +198,25 @@ public class GeoTIFF {
             } else {
                 ds.append(coverage, null);
             }
+        }
+    }
+
+    /**
+     * Reads and writes the image with Geotk.
+     */
+    private void withGeotk() throws DataStoreException {
+        GridCoverage coverage;
+        final var p = new TiffProvider();
+        var c = new StorageConnector(source);
+        try (DataStore ds = p.open(c)) {
+            final var r = (WritableGridCoverageResource) ds;
+            coverage = r.read(null, null);
+        }
+        c = new StorageConnector(target);
+        c.setOption(OptionKey.OPEN_OPTIONS, new OpenOption[] {StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE});
+        try (DataStore ds = p.open(c)) {
+            final var r = (WritableGridCoverageResource) ds;
+            r.write(coverage);
         }
     }
 
